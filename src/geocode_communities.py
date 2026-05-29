@@ -22,7 +22,7 @@ OUTPUT_FILE   = PROCESSED_DIR / "communities_with_addresses.csv"
 PLACES_URL    = "https://maps.googleapis.com/maps/api/place/textsearch/json"
 
 # Seconds to wait between API calls (stay well under the 600 QPM free tier)
-REQUEST_DELAY = 0.15
+REQUEST_DELAY = 0.35
 
 OUTPUT_FIELDS = [
     "ticker", "filing_year", "accession_number",
@@ -123,8 +123,6 @@ def main():
         )
 
     all_rows = load_all_rows()
-    if not all_rows:
-        raise SystemExit("No *_communities.csv files found in data/processed/")
 
     print(f"Loaded {len(all_rows):,} total rows from {len(list(PROCESSED_DIR.glob('*_communities.csv')))} files")
 
