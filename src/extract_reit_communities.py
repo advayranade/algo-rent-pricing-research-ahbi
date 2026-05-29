@@ -79,6 +79,16 @@ def is_header_or_junk(name: str) -> bool:
     if re.match(r'^[\d\(][\d\)\.]\s', name):
         return True
 
+    # Non-residential property types that appear in some REITs' Schedule III
+    # (MAA, Post Properties, etc. include office/retail/land in the same table)
+    NON_RESIDENTIAL = (
+        " OFFICE", " RETAIL", " COMMERCIAL", " LAND", " PARCEL",
+        "FOR-SALE CONDOMINIUM", "OTHER REAL ESTATE",
+    )
+    for suffix in NON_RESIDENTIAL:
+        if upper.endswith(suffix) or upper.startswith(suffix.strip()):
+            return True
+
     return False
 
 
@@ -109,12 +119,35 @@ def try_split_combined_cell(text: str) -> Optional[tuple]:
     return name, f"{city}, {state}"
 
 
-def find_name_and_location(texts: list) -> Optional[tuple]:
+def find_unit_count(texts: list, after_index: int) -> str:
     """
-    Extract (property_name, 'City, ST') from a row's non-empty cell texts.
+    Return the first integer in texts[after_index+1:] that is plausibly an
+    apartment unit count.  Returns '' if nothing matches.
+
+    Hard rules to avoid false positives:
+      - Range 50–2,499  (eliminates trivially small or large values)
+      - Exclude 1,900–2,030  (year-built values that EQR and others place
+        before the unit count column)
+      - Exclude multiples of 1,000  (rounded dollar figures in thousands)
+
+    Schedule III rows look like: Name | City, ST | 198 | $2,124 | ...
+    EQR rows look like:          Name | City, ST | 2003 | 420 | $...
+    """
+    for t in texts[after_index + 1:]:
+        clean = t.replace(',', '').strip()
+        if re.match(r'^\d+$', clean):
+            n = int(clean)
+            if 50 <= n <= 2499 and not (1900 <= n <= 2030) and n % 1000 != 0:
+                return str(n)
+    return ""
+
+
+def find_name_location_units(texts: list) -> Optional[tuple]:
+    """
+    Extract (property_name, 'City, ST', unit_count) from a row's cell texts.
 
     Layout A — separate cells (most REITs, including AVB Schedule III):
-        texts[0] = property name,  texts[1+] contains 'City, ST'
+        texts[0] = name  |  texts[i] = 'City, ST'  |  texts[i+1] = # homes
 
     Layout B — combined cell (e.g. CPT development/pipeline tables):
         texts[0] = 'Community Name City, ST'
@@ -122,15 +155,22 @@ def find_name_and_location(texts: list) -> Optional[tuple]:
     if not texts:
         return None
 
-    # Layout A: scan remaining cells for a standalone City, ST
+    # Layout A: scan for standalone City, ST then look right for unit count
     if len(texts) >= 2:
         name = texts[0]
-        for t in texts[1:]:
+        for i, t in enumerate(texts[1:], start=1):
             if CITY_STATE_RE.match(t):
-                return name, t
+                units = find_unit_count(texts, i)
+                return name, t, units
 
-    # Layout B: first cell may fuse name and location
-    return try_split_combined_cell(texts[0])
+    # Layout B: fused name+location cell (unit count is texts[1] if numeric)
+    result = try_split_combined_cell(texts[0])
+    if result:
+        name, location = result
+        units = find_unit_count(texts, 0)
+        return name, location, units
+
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -171,7 +211,7 @@ def extract_10k_html(text: str) -> str:
 def extract_communities(filepath: Path) -> list[dict]:
     """
     Parse one full-submission.txt and return a list of
-    {community_name, city, state} dicts found anywhere in the 10-K body.
+    {community_name, city, state, unit_count} dicts found in the 10-K body.
     """
     text = filepath.read_text(errors='replace')
     doc_html = extract_10k_html(text)
@@ -186,11 +226,11 @@ def extract_communities(filepath: Path) -> list[dict]:
         texts = [get_cell_text(td) for td in cells]
         texts = [t for t in texts if t]
 
-        result = find_name_and_location(texts)
+        result = find_name_location_units(texts)
         if result is None:
             continue
 
-        name, location = result
+        name, location, unit_count = result
 
         if is_header_or_junk(name):
             continue
@@ -207,7 +247,8 @@ def extract_communities(filepath: Path) -> list[dict]:
             continue
         seen.add(key)
 
-        communities.append({'community_name': name, 'city': city, 'state': state})
+        communities.append({'community_name': name, 'city': city, 'state': state,
+                            'unit_count': unit_count})
 
     return communities
 
@@ -287,6 +328,7 @@ def main():
                 'community_name': c['community_name'],
                 'city': c['city'],
                 'state': c['state'],
+                'unit_count': c.get('unit_count', ''),
             })
 
     if not all_rows:
@@ -298,7 +340,7 @@ def main():
         print("  - Location data is only in an exhibit, not the main 10-K HTML body.")
         return
 
-    fieldnames = ['ticker', 'filing_year', 'accession_number', 'community_name', 'city', 'state']
+    fieldnames = ['ticker', 'filing_year', 'accession_number', 'community_name', 'city', 'state', 'unit_count']
     with open(output_path, 'w', newline='', encoding='utf-8') as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()

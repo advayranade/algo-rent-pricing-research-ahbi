@@ -26,7 +26,7 @@ REQUEST_DELAY = 0.35
 
 OUTPUT_FIELDS = [
     "ticker", "filing_year", "accession_number",
-    "community_name", "city", "state",
+    "community_name", "city", "state", "unit_count",
     "formatted_address", "lat", "lng", "place_id", "api_status",
 ]
 
@@ -186,6 +186,7 @@ def main():
                 "community_name":    row["community_name"],
                 "city":              row["city"],
                 "state":             row["state"],
+                "unit_count":        row.get("unit_count", ""),
                 "formatted_address": result["formatted_address"],
                 "lat":               result["lat"],
                 "lng":               result["lng"],
