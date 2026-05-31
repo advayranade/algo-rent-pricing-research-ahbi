@@ -45,7 +45,6 @@ load_dotenv(Path(__file__).parent.parent / ".env")
 BASE_DIR      = Path(__file__).parent.parent
 PROCESSED_DIR = BASE_DIR / "data" / "processed"
 INPUT_FILE    = PROCESSED_DIR / "communities_with_tracts.csv"
-OUTPUT_FILE   = PROCESSED_DIR / "communities_with_acs.csv"
 CACHE_FILE    = PROCESSED_DIR / "acs_cache.json"
 
 ACS_URL       = "https://api.census.gov/data/{year}/acs/acs5"
@@ -267,9 +266,10 @@ def parse_args():
 
 
 def main():
-    args    = parse_args()
-    year    = args.year
-    api_key = os.environ.get("CENSUS_API_KEY", "").strip()
+    args        = parse_args()
+    year        = args.year
+    output_file = PROCESSED_DIR / f"communities_with_acs_{year}.csv"
+    api_key     = os.environ.get("CENSUS_API_KEY", "").strip()
 
     if not INPUT_FILE.exists():
         raise SystemExit(
@@ -343,7 +343,7 @@ def main():
     empty_acs = {col: "" for col in ACS_COLS}
 
     resolved = 0
-    with open(OUTPUT_FILE, "w", newline="", encoding="utf-8") as f:
+    with open(output_file, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=output_fields, extrasaction="ignore")
         writer.writeheader()
 
@@ -358,7 +358,7 @@ def main():
                 out = {**row, **empty_acs, "acs_year": year}
             writer.writerow(out)
 
-    print(f"\nWrote {len(all_rows):,} rows → {OUTPUT_FILE.name}")
+    print(f"\nWrote {len(all_rows):,} rows → {output_file.name}")
     print(f"  ACS data joined: {resolved:,}")
     print(f"  No ACS data:     {len(all_rows) - resolved:,}")
 
