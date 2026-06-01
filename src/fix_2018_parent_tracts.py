@@ -1,26 +1,21 @@
 """
-Second-pass fix for 2018 ACS nulls: parent-tract fallback.
+Second-pass fix for ACS nulls: parent-tract fallback.
 
-After fix_2018_crosswalk.py runs, 137 metro-county GEOIDs remain unresolved.
+After fix_2018_crosswalk.py runs, some metro-county GEOIDs remain unresolved.
 These are inter-decennial ACS tract splits — tracts created between the 2010 and
 2020 census that appear in the 2022/2023 ACS but have no 2010 predecessor in the
 2020→2010 relationship file.  They were geocoded as e.g. 53033024703 but the
-2018 ACS only has 53033024702 (the pre-split parent).
+target-year ACS only has 53033024702 (the pre-split parent).
 
 Fix: for each missing GEOID, find the nearest lower-numbered sibling in the same
-county that IS in the 2018 cache and use its ACS data as a proxy.
-
-This is a reasonable approximation because:
-  - ACS tract splits happen when population density increases, so sub-tracts are
-    demographically similar to each other and to the parent
-  - We only use this for tracts where no better data is available
-  - The component scripts themselves only use these tracts for their ACS
-    denominators (renter_occupied, rent_burden_30plus_pct, vacancy_rate)
+county that IS in the cache and use its ACS data as a proxy.
 
 Usage:
-    python src/fix_2018_parent_tracts.py
+    python src/fix_2018_parent_tracts.py            # defaults to --year 2018
+    python src/fix_2018_parent_tracts.py --year 2019
 """
 
+import argparse
 import json
 import csv
 import subprocess
@@ -52,30 +47,37 @@ METRO_COUNTIES = {
 ALL_METRO_FIPS = {fips for fips_list in METRO_COUNTIES.values() for fips in fips_list}
 
 
+def parse_args():
+    p = argparse.ArgumentParser()
+    p.add_argument("--year", type=int, default=2018,
+                   help="ACS vintage year to fix (default: 2018)")
+    return p.parse_args()
+
+
 def main():
-    print("Loading cache and identifying still-missing metro GEOIDs...")
+    year = parse_args().year
+    print(f"Fixing parent-tract fallback for year {year}...\n")
+
     cache  = json.load(open(CACHE_FILE, encoding="utf-8"))
     tracts = list(csv.DictReader(open(TRACTS_FILE, newline="", encoding="utf-8")))
 
     all_geoids = {r["census_tract_geoid"] for r in tracts if r.get("census_tract_geoid")}
 
-    flat_2018 = {
+    flat_year = {
         g: rec
         for key, recs in cache.items()
-        if key.startswith("2018|") and isinstance(recs, dict)
+        if key.startswith(f"{year}|") and isinstance(recs, dict)
         for g, rec in recs.items()
     }
 
-    still_missing = all_geoids - set(flat_2018.keys())
+    still_missing = all_geoids - set(flat_year.keys())
     metro_missing  = {g for g in still_missing if (g[:2] + g[2:5]) in ALL_METRO_FIPS}
-    print(f"  Metro GEOIDs still missing from 2018 cache: {len(metro_missing)}")
+    print(f"  Metro GEOIDs still missing from {year} cache: {len(metro_missing)}")
 
     # ── Find parent-tract proxies ─────────────────────────────────────────────
     parent_map: dict[str, str] = {}
     for g in metro_missing:
-        county_cache = cache.get(f"2018|{g[:2]}|{g[2:5]}", {})
-        # Try decrementing the last 2 digits of the 6-digit tract code until we
-        # find a sibling in the cache (e.g., 024703 -> 024702 -> 024701 -> 024700)
+        county_cache = cache.get(f"{year}|{g[:2]}|{g[2:5]}", {})
         for suffix in range(int(g[9:]) - 1, -1, -1):
             candidate = g[:9] + f"{suffix:02d}"
             if candidate in county_cache:
@@ -91,27 +93,26 @@ def main():
     print("\nInjecting parent-tract ACS records into cache...")
     for g_child, g_parent in parent_map.items():
         state, county = g_child[:2], g_child[2:5]
-        ck = f"2018|{state}|{county}"
+        ck = f"{year}|{state}|{county}"
         if ck not in cache:
             cache[ck] = {}
-        # Copy parent record verbatim — all counts, all derived rates
-        cache[ck][g_child] = dict(flat_2018[g_parent])
+        cache[ck][g_child] = dict(flat_year[g_parent])
 
     json.dump(cache, open(CACHE_FILE, "w", encoding="utf-8"), indent=2)
 
     new_flat = {
         g: rec
         for key, recs in cache.items()
-        if key.startswith("2018|") and isinstance(recs, dict)
+        if key.startswith(f"{year}|") and isinstance(recs, dict)
         for g, rec in recs.items()
     }
-    print(f"  Cache records (before): {len(flat_2018)}")
+    print(f"  Cache records (before): {len(flat_year)}")
     print(f"  Cache records (after):  {len(new_flat)}")
 
-    # ── Regenerate communities_with_acs_2018.csv ──────────────────────────────
-    print("\nRegenerating communities_with_acs_2018.csv...")
+    # ── Regenerate communities_with_acs_{year}.csv ────────────────────────────
+    print(f"\nRegenerating communities_with_acs_{year}.csv...")
     result = subprocess.run(
-        [sys.executable, "src/get_acs_data.py", "--year", "2018"],
+        [sys.executable, "get_acs_data.py", "--year", str(year)],
         capture_output=True, text=True
     )
     print(result.stdout.strip())
@@ -121,18 +122,16 @@ def main():
 
     # ── Verify ────────────────────────────────────────────────────────────────
     print("\nVerification:")
-    rows_2018 = list(csv.DictReader(
-        open(PROCESSED_DIR / "communities_with_acs_2018.csv", newline="", encoding="utf-8")
-    ))
-    nulls_ro  = sum(1 for r in rows_2018 if not r.get("renter_occupied", ""))
-    nulls_rb  = sum(1 for r in rows_2018 if not r.get("rent_burden_30plus_pct", ""))
-    nulls_vr  = sum(1 for r in rows_2018 if not r.get("vacancy_rate", ""))
-    print(f"  Null renter_occupied:        {nulls_ro:4d} / {len(rows_2018)}")
-    print(f"  Null rent_burden_30plus_pct: {nulls_rb:4d} / {len(rows_2018)}")
-    print(f"  Null vacancy_rate:           {nulls_vr:4d} / {len(rows_2018)}")
+    out_csv = PROCESSED_DIR / f"communities_with_acs_{year}.csv"
+    rows_out = list(csv.DictReader(open(out_csv, newline="", encoding="utf-8")))
+    nulls_ro = sum(1 for r in rows_out if not r.get("renter_occupied", ""))
+    nulls_rb = sum(1 for r in rows_out if not r.get("rent_burden_30plus_pct", ""))
+    nulls_vr = sum(1 for r in rows_out if not r.get("vacancy_rate", ""))
+    print(f"  Null renter_occupied:        {nulls_ro:4d} / {len(rows_out)}")
+    print(f"  Null rent_burden_30plus_pct: {nulls_rb:4d} / {len(rows_out)}")
+    print(f"  Null vacancy_rate:           {nulls_vr:4d} / {len(rows_out)}")
 
-    # Metro-only null check (what actually affects the index)
-    metro_rows = [r for r in rows_2018
+    metro_rows = [r for r in rows_out
                   if (r.get("state_fips","") + r.get("county_fips","")) in ALL_METRO_FIPS]
     m_nulls_ro = sum(1 for r in metro_rows if not r.get("renter_occupied", ""))
     m_nulls_rb = sum(1 for r in metro_rows if not r.get("rent_burden_30plus_pct", ""))

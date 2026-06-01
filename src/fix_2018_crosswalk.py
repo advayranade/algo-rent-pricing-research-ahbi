@@ -1,26 +1,28 @@
 """
-Fix 2018 ACS null data caused by 2020→2010 census tract boundary mismatch.
+Fix ACS null data caused by 2020→2010 census tract boundary mismatch.
 
-The communities were geocoded against 2020 tract definitions, but the 2018 ACS
-only publishes data under 2010 tract GEOIDs. Any 2020 tract that was created or
-renumbered in the 2020 redistricting will be missing from the 2018 cache.
+The communities were geocoded against 2020 tract definitions, but pre-2020 ACS
+vintages only publish data under 2010 tract GEOIDs. Any 2020 tract that was
+created or renumbered in the 2020 redistricting will be missing from the cache.
 
 This script:
-  1. Identifies the missing 2020-definition GEOIDs in the 2018 cache
+  1. Identifies the missing 2020-definition GEOIDs in the target year's cache
   2. Uses the Census 2020→2010 tract relationship file to find 2010 predecessors
-  3. Looks up 2010 tract records already in the 2018 ACS cache (all counties were
+  3. Looks up 2010 tract records already in the ACS cache (all counties were
      fetched by get_acs_data.py, so 2010 tracts are already there — no new API
      calls needed in most cases)
   4. Interpolates raw counts using area-overlap weights, then recomputes derived
      rates (never average rates directly)
   5. Injects the synthetic 2020-keyed records back into the cache under the
-     correct "2018|state|county" key
-  6. Writes the updated cache and re-runs get_acs_data.py --year 2018
+     correct "{year}|state|county" key
+  6. Writes the updated cache and re-runs get_acs_data.py --year {year}
 
 Usage:
-    python src/fix_2018_crosswalk.py
+    python src/fix_2018_crosswalk.py            # defaults to --year 2018
+    python src/fix_2018_crosswalk.py --year 2019
 """
 
+import argparse
 import csv
 import json
 import os
@@ -32,6 +34,15 @@ import requests
 from dotenv import load_dotenv
 
 load_dotenv()
+
+def parse_args():
+    p = argparse.ArgumentParser()
+    p.add_argument("--year", type=int, default=2018,
+                   help="ACS vintage year to fix (default: 2018)")
+    return p.parse_args()
+
+# YEAR is set in main() from args; module-level references below use the global
+YEAR = 2018  # overridden in main()
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -45,9 +56,7 @@ CACHE_FILE        = PROCESSED_DIR / "acs_cache.json"
 TRACTS_FILE       = PROCESSED_DIR / "communities_with_tracts.csv"
 RELATIONSHIP_FILE = RAW_DIR / "tab20_tract20_tract10_natl.txt"
 
-ACS_URL       = "https://api.census.gov/data/2018/acs/acs5"
 REQUEST_DELAY = 0.25
-YEAR          = 2018
 
 # ---------------------------------------------------------------------------
 # ACS variables — must stay in sync with get_acs_data.py
@@ -160,11 +169,11 @@ def geoid_to_state_county(geoid: str):
     return geoid[:2], geoid[2:5]
 
 
-def load_flat_2018(cache: dict) -> dict:
-    """Merge all 2018 county records into one flat {geoid: record} dict."""
+def load_flat_year(cache: dict) -> dict:
+    """Merge all target-year county records into one flat {geoid: record} dict."""
     flat = {}
     for key, records in cache.items():
-        if key.startswith("2018|") and isinstance(records, dict):
+        if key.startswith(f"{YEAR}|") and isinstance(records, dict):
             flat.update(records)
     return flat
 
@@ -173,7 +182,8 @@ def load_flat_2018(cache: dict) -> dict:
 # Fetch a single county from the Census API (fallback for 2010 tracts not cached)
 # ---------------------------------------------------------------------------
 
-def fetch_county_2018(state: str, county: str, api_key: str) -> dict:
+def fetch_county_year(state: str, county: str, api_key: str) -> dict:
+    acs_url = f"https://api.census.gov/data/{YEAR}/acs/acs5"
     var_str = ",".join(VARIABLES.keys())
     params  = {
         "get": f"NAME,{var_str}",
@@ -183,7 +193,7 @@ def fetch_county_2018(state: str, county: str, api_key: str) -> dict:
     if api_key:
         params["key"] = api_key
 
-    resp = requests.get(ACS_URL, params=params, timeout=20)
+    resp = requests.get(acs_url, params=params, timeout=20)
     if resp.status_code == 404:
         return {}
     resp.raise_for_status()
@@ -212,6 +222,10 @@ def fetch_county_2018(state: str, county: str, api_key: str) -> dict:
 # ---------------------------------------------------------------------------
 
 def main():
+    global YEAR
+    YEAR = parse_args().year
+    print(f"Fixing ACS crosswalk for year {YEAR}...\n")
+
     if not RELATIONSHIP_FILE.exists():
         raise SystemExit(
             f"Relationship file not found: {RELATIONSHIP_FILE}\n"
@@ -225,20 +239,20 @@ def main():
         raise SystemExit("CENSUS_API_KEY not set in .env")
 
     # ── 1. Find missing 2020 GEOIDs ──────────────────────────────────────────
-    print("Step 1: Finding missing 2020 GEOIDs in 2018 ACS cache...")
+    print(f"Step 1: Finding missing 2020 GEOIDs in {YEAR} ACS cache...")
     tracts_rows = list(csv.DictReader(open(TRACTS_FILE, newline="", encoding="utf-8")))
     all_2020_geoids = {r["census_tract_geoid"] for r in tracts_rows if r.get("census_tract_geoid")}
     print(f"  Unique 2020 GEOIDs in communities_with_tracts: {len(all_2020_geoids)}")
 
     cache = json.load(open(CACHE_FILE, encoding="utf-8"))
-    flat_2018 = load_flat_2018(cache)
-    print(f"  2018 tract records in cache:                   {len(flat_2018)}")
+    flat_2018 = load_flat_year(cache)
+    print(f"  {YEAR} tract records in cache:                  {len(flat_2018)}")
 
     missing_2020 = all_2020_geoids - set(flat_2018.keys())
-    print(f"  Missing 2020 GEOIDs (not in 2018 cache):       {len(missing_2020)}")
+    print(f"  Missing 2020 GEOIDs (not in {YEAR} cache):     {len(missing_2020)}")
 
     if not missing_2020:
-        print("Nothing to fix — all GEOIDs already resolved in 2018 cache.")
+        print(f"Nothing to fix — all GEOIDs already resolved in {YEAR} cache.")
         return
 
     # ── 2. Build crosswalk: 2020 GEOID → [(2010 GEOID, weight)] ──────────────
@@ -283,7 +297,7 @@ def main():
                 continue
             print(f"  [{i}/{len(uncached_counties)}]  state={state}  county={county} ...", end=" ", flush=True)
             try:
-                records = fetch_county_2018(state, county, api_key)
+                records = fetch_county_year(state, county, api_key)
                 cache[ck] = records
                 flat_2018.update(records)
                 print(f"{len(records)} tracts")
@@ -368,28 +382,27 @@ def main():
     # ── 5. Save updated cache ─────────────────────────────────────────────────
     print("\nStep 5: Saving updated cache...")
     json.dump(cache, open(CACHE_FILE, "w", encoding="utf-8"), indent=2)
-    new_flat = load_flat_2018(cache)
+    new_flat = load_flat_year(cache)
     print(f"  Cache saved → {CACHE_FILE.name}")
-    print(f"  2018 tract records in cache (before): {len(flat_2018) - injected}")
-    print(f"  2018 tract records in cache (after):  {len(new_flat)}")
+    print(f"  {YEAR} tract records in cache (before): {len(flat_2018) - injected}")
+    print(f"  {YEAR} tract records in cache (after):  {len(new_flat)}")
 
-    # ── 6. Regenerate communities_with_acs_2018.csv ───────────────────────────
-    print("\nStep 6: Regenerating communities_with_acs_2018.csv...")
+    # ── 6. Regenerate communities_with_acs_{year}.csv ─────────────────────────
+    print(f"\nStep 6: Regenerating communities_with_acs_{YEAR}.csv...")
     import subprocess, sys
     result = subprocess.run(
-        [sys.executable, "src/get_acs_data.py", "--year", "2018"],
+        [sys.executable, "get_acs_data.py", "--year", str(YEAR)],
         capture_output=False,
     )
     if result.returncode != 0:
-        raise SystemExit("get_acs_data.py --year 2018 failed")
+        raise SystemExit(f"get_acs_data.py --year {YEAR} failed")
 
     # ── 7. Final null check ───────────────────────────────────────────────────
-    print("\nStep 7: Verifying null counts in regenerated 2018 file...")
-    rows_2018 = list(csv.DictReader(
-        open(PROCESSED_DIR / "communities_with_acs_2018.csv", newline="", encoding="utf-8")
-    ))
-    nulls = sum(1 for r in rows_2018 if not r.get("renter_occupied", ""))
-    print(f"  Null renter_occupied in 2018 file: {nulls}/{len(rows_2018)}")
+    print(f"\nStep 7: Verifying null counts in regenerated {YEAR} file...")
+    out_csv = PROCESSED_DIR / f"communities_with_acs_{YEAR}.csv"
+    rows_out = list(csv.DictReader(open(out_csv, newline="", encoding="utf-8")))
+    nulls = sum(1 for r in rows_out if not r.get("renter_occupied", ""))
+    print(f"  Null renter_occupied in {YEAR} file: {nulls}/{len(rows_out)}")
     if nulls < 50:
         print("  ✓ Null count is within acceptable range")
     else:
