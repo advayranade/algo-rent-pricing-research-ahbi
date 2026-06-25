@@ -1,6 +1,6 @@
 # Algorithmic Rent Pricing & the Affordable Housing Burden Index (AHBI)
 
-**Paper:** [SSRN Working Paper](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=6941879)
+**Paper:** [Social Science Research Network Preprint](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=6941879)
 
 ## Overview
 
