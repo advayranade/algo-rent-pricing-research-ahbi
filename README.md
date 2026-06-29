@@ -1,6 +1,6 @@
 # Measuring Racial Disparities in Rent Growth Under Algorithmic Landlord Concentration in U.S. Metros
 
-**Paper:** [https://arxiv.org/abs/2606.27525](https://arxiv.org/abs/2606.27525)
+**Paper:** [https://arxiv.org/abs/2606.27525](https://arxiv.org/abs/2606.27525) | [https://dx.doi.org/10.2139/ssrn.6941879](https://doi.org/10.2139/ssrn.6941879)
 
 ## Overview
 
