@@ -11,6 +11,21 @@ This is our research codebase for the AHBI project. It examines whether institut
 * test three core hypotheses using OLS regression, XGBoost with SHAP, and spatial econometric models (Moran's I, SAR, SEM), and
 * produce an interactive per-tract prediction tool with SHAP waterfall explanations.
 
+## Citation Guidelines
+If this repository is used in an academic work, please cite the coindicing research paper:
+
+```bibtex
+@misc{ranade2026algorithmiclandlordracial,
+      title={Measuring Racial Disparities in Rent Growth Under Algorithmic Landlord Concentration in U.S. Metros}, 
+      author={Advay Ranade},
+      year={2026},
+      eprint={2606.27525},
+      archivePrefix={arXiv},
+      primaryClass={econ.GN},
+      url={https://arxiv.org/abs/2606.27525}, 
+}
+```
+
 ## Research Hypotheses
 
 **H1** — Do census tracts with higher REIT ownership share (2019) experience faster rent growth (2019→2023), as measured by ZORI?
