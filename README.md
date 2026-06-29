@@ -1,6 +1,6 @@
-# Algorithmic Rent Pricing & the Affordable Housing Burden Index (AHBI)
+# Measuring Racial Disparities in Rent Growth Under Algorithmic Landlord Concentration in U.S. Metros
 
-**Paper:** [Social Science Research Network Preprint](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=6941879)
+**Paper:** [https://arxiv.org/abs/2606.27525](https://arxiv.org/abs/2606.27525)
 
 ## Overview
 
